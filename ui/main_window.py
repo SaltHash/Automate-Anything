@@ -13,7 +13,7 @@ from PySide6.QtGui import QFont, QColor, QPalette, QAction
 
 from core.config import Config
 from core.storage import Database, Macro
-from core.api_client import GroqClient, AVAILABLE_MODELS
+from core.api_client import AIClient, PROVIDER_CONFIG
 from core.engine import AutomationEngine
 from ui.theme import COLORS, STYLESHEET
 from ui.setup_dialog import SetupDialog
@@ -31,7 +31,7 @@ class GenerateThread(QThread):
     finished = Signal(object)  # Macro or None
     error = Signal(str)
 
-    def __init__(self, client: GroqClient, prompt: str):
+    def __init__(self, client: AIClient, prompt: str):
         super().__init__()
         self.client = client
         self.prompt = prompt
@@ -485,21 +485,35 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(10)
 
-        # Model selector
+        provider_label = QLabel("Provider:")
+        provider_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        layout.addWidget(provider_label)
+
+        self._provider_combo = QComboBox()
+        self._provider_combo.setFixedHeight(32)
+        for provider, cfg in PROVIDER_CONFIG.items():
+            self._provider_combo.addItem(cfg["label"], provider)
+        pidx = self._provider_combo.findData(self.config.get_provider())
+        if pidx >= 0:
+            self._provider_combo.setCurrentIndex(pidx)
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
+        layout.addWidget(self._provider_combo)
+
         model_label = QLabel("Model:")
         model_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         layout.addWidget(model_label)
 
         self._model_combo = QComboBox()
         self._model_combo.setFixedHeight(32)
-        for m in AVAILABLE_MODELS:
-            self._model_combo.addItem(m, m)
-        cur = self.config.get_model()
-        idx = self._model_combo.findData(cur)
-        if idx >= 0:
-            self._model_combo.setCurrentIndex(idx)
+        self._model_input = QLineEdit()
+        self._model_input.setFixedHeight(32)
+        self._model_input.hide()
+        self._model_input.editingFinished.connect(self._on_model_text_change)
         self._model_combo.currentIndexChanged.connect(self._on_model_change)
         layout.addWidget(self._model_combo)
+        layout.addWidget(self._model_input)
+
+        self._sync_provider_controls()
 
         layout.addStretch()
 
@@ -538,14 +552,19 @@ class MainWindow(QMainWindow):
             self._show_setup()
             return
 
-        client = GroqClient(
-            api_key=self.config.get_api_key(),
-            model=self.config.get_model(),
-            openrouter_api_key=self.config.get_openrouter_api_key(),
+        provider = self.config.get_provider()
+        if not self.config.has_api_key_for_provider(provider):
+            self._prompt_panel.set_loading(False, f"No API key set for {PROVIDER_CONFIG[provider]['label']}. Open Settings.")
+            self._show_setup()
+            return
+
+        client = AIClient(
+            provider=provider,
+            model=self.config.get_model_for_provider(provider),
+            api_keys=self.config.get_all_provider_keys(),
         )
 
-        provider = "OpenRouter" if self.config.get_openrouter_api_key() else "Groq"
-        self._prompt_panel.set_loading(True, f"Connecting to {provider}…")
+        self._prompt_panel.set_loading(True, f"Connecting to {PROVIDER_CONFIG[provider]['label']}…")
         self._preview_panel.hide()
 
         self._gen_thread = GenerateThread(client, prompt)
@@ -621,16 +640,53 @@ class MainWindow(QMainWindow):
     def _show_setup(self):
         dlg = SetupDialog(self.config, self)
         dlg.exec()
-        # Update model combo after settings change
-        cur = self.config.get_model()
-        idx = self._model_combo.findData(cur)
-        if idx >= 0:
-            self._model_combo.setCurrentIndex(idx)
+        self._sync_provider_controls()
+
+    def _on_provider_change(self, idx: int):
+        provider = self._provider_combo.currentData()
+        if provider:
+            self.config.set_provider(provider)
+            self._sync_provider_controls()
+
+    def _sync_provider_controls(self):
+        provider = self.config.get_provider()
+        pidx = self._provider_combo.findData(provider)
+        if pidx >= 0 and self._provider_combo.currentIndex() != pidx:
+            self._provider_combo.setCurrentIndex(pidx)
+
+        cfg = PROVIDER_CONFIG[provider]
+        model_mode = cfg.get("model_input", "dropdown")
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        for model in cfg.get("models", []):
+            self._model_combo.addItem(model, model)
+        cur = self.config.get_model_for_provider(provider)
+        midx = self._model_combo.findData(cur)
+        if midx >= 0:
+            self._model_combo.setCurrentIndex(midx)
+        self._model_combo.blockSignals(False)
+
+        if model_mode == "text":
+            self._model_combo.hide()
+            self._model_input.show()
+            self._model_input.setText(cur)
+        else:
+            self._model_input.hide()
+            self._model_combo.show()
+            if midx < 0 and self._model_combo.count() > 0:
+                self.config.set_model_for_provider(provider, self._model_combo.currentData())
 
     def _on_model_change(self, idx: int):
+        provider = self.config.get_provider()
         model = self._model_combo.currentData()
         if model:
-            self.config.set_model(model)
+            self.config.set_model_for_provider(provider, model)
+
+    def _on_model_text_change(self):
+        provider = self.config.get_provider()
+        model = self._model_input.text().strip()
+        if model:
+            self.config.set_model_for_provider(provider, model)
 
     def closeEvent(self, event):
         if self._run_thread and self._run_thread.isRunning():
