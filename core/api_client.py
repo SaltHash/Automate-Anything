@@ -1,5 +1,5 @@
 """
-API Client - Groq integration for macro generation
+API Client - Groq/OpenRouter integration for macro generation
 """
 import json
 import re
@@ -11,12 +11,17 @@ from core.storage import Macro, MacroAction
 
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 AVAILABLE_MODELS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
     "gemma2-9b-it",
     "mixtral-8x7b-32768",
+    OPENROUTER_DEFAULT_MODEL,
 ]
 
 SYSTEM_PROMPT = """You are an automation expert. When given a task description, generate a structured desktop automation macro.
@@ -92,8 +97,9 @@ class APIError(Exception):
 
 
 class GroqClient:
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile", openrouter_api_key: str = ""):
         self.api_key = self._normalize_api_key(api_key)
+        self.openrouter_api_key = self._normalize_api_key(openrouter_api_key)
         self.model = model
 
     @staticmethod
@@ -105,18 +111,55 @@ class GroqClient:
             key = key[1:-1].strip()
         return key
 
+    @property
+    def _use_openrouter(self) -> bool:
+        return bool(self.openrouter_api_key)
+
+    @property
+    def _active_key(self) -> str:
+        return self.openrouter_api_key if self._use_openrouter else self.api_key
+
+    @property
+    def _chat_url(self) -> str:
+        return OPENROUTER_API_URL if self._use_openrouter else GROQ_API_URL
+
+    @property
+    def _models_url(self) -> str:
+        return OPENROUTER_MODELS_URL if self._use_openrouter else GROQ_MODELS_URL
+
+    @property
+    def _resolved_model(self) -> str:
+        if not self._use_openrouter:
+            return self.model
+        if self.model in AVAILABLE_MODELS[:4]:
+            return OPENROUTER_DEFAULT_MODEL
+        return self.model or OPENROUTER_DEFAULT_MODEL
+
+    def _headers(self) -> dict:
+        headers = {
+            "Authorization": f"Bearer {self._active_key}",
+            "Content-Type": "application/json",
+        }
+        if self._use_openrouter:
+            headers["HTTP-Referer"] = "https://automate-anything.local"
+            headers["X-Title"] = "Automate Anything"
+        return headers
+
     def validate_key(self) -> tuple[bool, str]:
         """Quick validation by listing models."""
         try:
             req = urllib.request.Request(
-                "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                self._models_url,
+                headers=self._headers(),
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status == 200, ""
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 return False, "Invalid API key. Please check and try again."
+            if e.code == 403:
+                provider = "OpenRouter" if self._use_openrouter else "Groq"
+                return False, f"Access denied by {provider} (HTTP 403). Check key permissions and account status."
             return False, f"Validation failed (HTTP {e.code}). Please try again."
         except urllib.error.URLError as e:
             return False, f"Network error during validation: {e.reason}"
@@ -131,10 +174,11 @@ class GroqClient:
         """Call Groq API and parse response into a Macro."""
 
         if progress_callback:
-            progress_callback("Sending request to Groq API...")
+            provider = "OpenRouter" if self._use_openrouter else "Groq"
+            progress_callback(f"Sending request to {provider} API...")
 
         payload = json.dumps({
-            "model": self.model,
+            "model": self._resolved_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Create a macro for: {prompt}"},
@@ -143,15 +187,7 @@ class GroqClient:
             "max_tokens": 2048,
         }).encode("utf-8")
 
-        req = urllib.request.Request(
-            GROQ_API_URL,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        req = urllib.request.Request(self._chat_url, data=payload, headers=self._headers(), method="POST")
 
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -159,7 +195,8 @@ class GroqClient:
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             if e.code == 401:
-                raise APIError("Invalid API key. Please check your Groq API key.", 401)
+                provider = "OpenRouter" if self._use_openrouter else "Groq"
+                raise APIError(f"Invalid API key. Please check your {provider} API key.", 401)
             elif e.code == 429:
                 raise APIError("Rate limit exceeded. Please wait and try again.", 429)
             else:

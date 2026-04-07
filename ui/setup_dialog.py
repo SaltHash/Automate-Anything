@@ -3,10 +3,10 @@ Setup Dialog - API key configuration on first launch
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QComboBox, QWidget, QFrame, QMessageBox
+    QPushButton, QFrame
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont
 
 from core.config import Config
 from core.api_client import GroqClient, AVAILABLE_MODELS
@@ -16,12 +16,13 @@ from ui.theme import COLORS
 class ValidateThread(QThread):
     result = Signal(bool, str)
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, openrouter_api_key: str):
         super().__init__()
         self.api_key = api_key
+        self.openrouter_api_key = openrouter_api_key
 
     def run(self):
-        client = GroqClient(self.api_key)
+        client = GroqClient(self.api_key, openrouter_api_key=self.openrouter_api_key)
         valid, message = client.validate_key()
         if valid:
             self.result.emit(True, "")
@@ -34,7 +35,7 @@ class SetupDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("Welcome to Automate Anything")
-        self.setFixedSize(520, 480)
+        self.setFixedSize(520, 510)
         self.setModal(True)
         self._api_key_visible = False
         self._setup_ui()
@@ -100,7 +101,7 @@ class SetupDialog(QDialog):
         card_layout.addLayout(api_input_row)
 
         hint = QLabel("Get your free API key at console.groq.com")
-        hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; border: none; background: transparent;")
+        hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; border: none; background: transparent; margin-top: 4px;")
         card_layout.addWidget(hint)
 
         # Separator
@@ -109,21 +110,17 @@ class SetupDialog(QDialog):
         sep.setStyleSheet(f"color: {COLORS['border']}; border: none; background: {COLORS['border']}; max-height: 1px;")
         card_layout.addWidget(sep)
 
-        # Model selection
-        model_label = QLabel("Model")
-        model_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; border: none; background: transparent;")
-        card_layout.addWidget(model_label)
+        # OpenRouter key
+        openrouter_label = QLabel("OpenRouter API Key (Optional)")
+        openrouter_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; border: none; background: transparent;")
+        card_layout.addWidget(openrouter_label)
 
-        self.model_combo = QComboBox()
-        for m in AVAILABLE_MODELS:
-            self.model_combo.addItem(m, m)
-
-        current = self.config.get_model()
-        idx = self.model_combo.findData(current)
-        if idx >= 0:
-            self.model_combo.setCurrentIndex(idx)
-        self.model_combo.setFixedHeight(40)
-        card_layout.addWidget(self.model_combo)
+        self.openrouter_input = QLineEdit()
+        self.openrouter_input.setPlaceholderText("Enter OpenRouter API key")
+        self.openrouter_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.openrouter_input.setText(self.config.get_openrouter_api_key())
+        self.openrouter_input.setFixedHeight(40)
+        card_layout.addWidget(self.openrouter_input)
 
         layout.addWidget(card)
         layout.addSpacing(24)
@@ -149,22 +146,25 @@ class SetupDialog(QDialog):
         self._api_key_visible = not self._api_key_visible
         if self._api_key_visible:
             self.api_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.openrouter_input.setEchoMode(QLineEdit.EchoMode.Normal)
             self.toggle_visibility_btn.setText("Hide")
         else:
             self.api_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.openrouter_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_visibility_btn.setText("View")
 
     def _save(self):
         key = self.api_input.text().strip()
-        if not key:
-            self.status_label.setText("Please enter your API key.")
+        openrouter_key = self.openrouter_input.text().strip()
+        if not key and not openrouter_key:
+            self.status_label.setText("Please enter a Groq or OpenRouter API key.")
             return
 
         self.save_btn.setText("Validating...")
         self.save_btn.setEnabled(False)
         self.status_label.setText("")
 
-        self._thread = ValidateThread(key)
+        self._thread = ValidateThread(key, openrouter_key)
         self._thread.result.connect(self._on_validate)
         self._thread.start()
 
@@ -174,7 +174,9 @@ class SetupDialog(QDialog):
 
         if valid:
             self.config.set_api_key(self.api_input.text().strip())
-            self.config.set_model(self.model_combo.currentData())
+            self.config.set_openrouter_api_key(self.openrouter_input.text().strip())
+            if self.config.get_model() not in AVAILABLE_MODELS:
+                self.config.set_model(AVAILABLE_MODELS[0])
             self.accept()
         else:
             self.status_label.setText(error or "Validation failed.")

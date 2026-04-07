@@ -541,9 +541,11 @@ class MainWindow(QMainWindow):
         client = GroqClient(
             api_key=self.config.get_api_key(),
             model=self.config.get_model(),
+            openrouter_api_key=self.config.get_openrouter_api_key(),
         )
 
-        self._prompt_panel.set_loading(True, "Connecting to Groq…")
+        provider = "OpenRouter" if self.config.get_openrouter_api_key() else "Groq"
+        self._prompt_panel.set_loading(True, f"Connecting to {provider}…")
         self._preview_panel.hide()
 
         self._gen_thread = GenerateThread(client, prompt)
