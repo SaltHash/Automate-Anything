@@ -93,10 +93,19 @@ class APIError(Exception):
 
 class GroqClient:
     def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
-        self.api_key = api_key
+        self.api_key = self._normalize_api_key(api_key)
         self.model = model
 
-    def validate_key(self) -> bool:
+    @staticmethod
+    def _normalize_api_key(api_key: str) -> str:
+        key = (api_key or "").strip()
+        if key.lower().startswith("bearer "):
+            key = key[7:].strip()
+        if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+            key = key[1:-1].strip()
+        return key
+
+    def validate_key(self) -> tuple[bool, str]:
         """Quick validation by listing models."""
         try:
             req = urllib.request.Request(
@@ -104,13 +113,15 @@ class GroqClient:
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status == 200
+                return resp.status == 200, ""
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                return False
-            return False
-        except Exception:
-            return False
+                return False, "Invalid API key. Please check and try again."
+            return False, f"Validation failed (HTTP {e.code}). Please try again."
+        except urllib.error.URLError as e:
+            return False, f"Network error during validation: {e.reason}"
+        except Exception as e:
+            return False, f"Validation error: {e}"
 
     def generate_macro(
         self,

@@ -1,7 +1,6 @@
 """
 Main Window - Primary application interface
 """
-import random
 import time
 
 from PySide6.QtWidgets import (
@@ -22,18 +21,7 @@ from ui.macro_list import MacroListPanel
 from ui.macro_editor import MacroEditorDialog
 
 
-PLACEHOLDERS = [
-    "Click the submit button after filling the form…",
-    "Download all images from the current page…",
-    "Open Settings and change the theme to dark…",
-    "Select all text in the editor and copy it…",
-    "Close all browser tabs and open a new one…",
-    "Scroll to the bottom and click 'Load More'…",
-    "Take a screenshot every 10 seconds for 1 minute…",
-    "Search for 'Python' on the active browser tab…",
-    "Press Ctrl+S to save the current document…",
-    "Move the mouse to the top-right corner and click…",
-]
+PLACEHOLDER_TEXT = "Prompt suggestions"
 
 
 # ─── Background Workers ───────────────────────────────────────────────────────
@@ -112,7 +100,7 @@ class PromptPanel(QWidget):
 
         self.prompt_input = QLineEdit()
         self.prompt_input.setFixedHeight(52)
-        self.prompt_input.setPlaceholderText(random.choice(PLACEHOLDERS))
+        self.prompt_input.setPlaceholderText(PLACEHOLDER_TEXT)
         self.prompt_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {COLORS['bg_card']};

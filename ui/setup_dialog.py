@@ -22,11 +22,11 @@ class ValidateThread(QThread):
 
     def run(self):
         client = GroqClient(self.api_key)
-        valid = client.validate_key()
+        valid, message = client.validate_key()
         if valid:
             self.result.emit(True, "")
         else:
-            self.result.emit(False, "Invalid API key. Please check and try again.")
+            self.result.emit(False, message or "Invalid API key. Please check and try again.")
 
 
 class SetupDialog(QDialog):
@@ -36,6 +36,7 @@ class SetupDialog(QDialog):
         self.setWindowTitle("Welcome to Automate Anything")
         self.setFixedSize(520, 480)
         self.setModal(True)
+        self._api_key_visible = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -76,12 +77,27 @@ class SetupDialog(QDialog):
         api_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; border: none; background: transparent;")
         card_layout.addWidget(api_label)
 
+        api_input_row = QHBoxLayout()
+        api_input_row.setSpacing(8)
+
         self.api_input = QLineEdit()
-        self.api_input.setPlaceholderText("gsk_...")
+        self.api_input.setPlaceholderText("Enter Groq API key")
         self.api_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_input.setText(self.config.get_api_key())
         self.api_input.setFixedHeight(44)
-        card_layout.addWidget(self.api_input)
+        api_input_row.addWidget(self.api_input, stretch=1)
+
+        self.toggle_visibility_btn = QPushButton("View")
+        self.toggle_visibility_btn.setProperty("secondary", True)
+        self.toggle_visibility_btn.setFixedHeight(44)
+        self.toggle_visibility_btn.setFixedWidth(72)
+        self.toggle_visibility_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_visibility_btn.clicked.connect(self._toggle_api_visibility)
+        self.toggle_visibility_btn.style().unpolish(self.toggle_visibility_btn)
+        self.toggle_visibility_btn.style().polish(self.toggle_visibility_btn)
+        api_input_row.addWidget(self.toggle_visibility_btn)
+
+        card_layout.addLayout(api_input_row)
 
         hint = QLabel("Get your free API key at console.groq.com")
         hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; border: none; background: transparent;")
@@ -128,6 +144,15 @@ class SetupDialog(QDialog):
         layout.addWidget(self.save_btn)
 
         layout.addStretch()
+
+    def _toggle_api_visibility(self):
+        self._api_key_visible = not self._api_key_visible
+        if self._api_key_visible:
+            self.api_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.toggle_visibility_btn.setText("Hide")
+        else:
+            self.api_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.toggle_visibility_btn.setText("View")
 
     def _save(self):
         key = self.api_input.text().strip()
