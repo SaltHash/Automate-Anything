@@ -1,28 +1,60 @@
 """
-API Client - Groq/OpenRouter integration for macro generation
+API Client - multi-provider integration for macro generation
 """
 import json
 import re
 import urllib.request
 import urllib.error
-from typing import List, Callable, Optional
+from typing import Callable, Optional
 
 from core.storage import Macro, MacroAction
 
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
+PROVIDER_CONFIG = {
+    "groq": {
+        "label": "Groq",
+        "chat_url": "https://api.groq.com/openai/v1/chat/completions",
+        "models_url": "https://api.groq.com/openai/v1/models",
+        "models": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "gemma2-9b-it",
+            "mixtral-8x7b-32768",
+        ],
+        "model_input": "dropdown",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "chat_url": "https://api.openai.com/v1/chat/completions",
+        "models_url": "https://api.openai.com/v1/models",
+        "models": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"],
+        "model_input": "dropdown",
+    },
+    "anthropic": {
+        "label": "Anthropic",
+        "chat_url": "https://api.anthropic.com/v1/messages",
+        "models_url": "https://api.anthropic.com/v1/models",
+        "models": ["claude-3-5-haiku-latest", "claude-3-7-sonnet-latest"],
+        "model_input": "dropdown",
+    },
+    "gemini": {
+        "label": "Google Gemini",
+        "chat_url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "models_url": "https://generativelanguage.googleapis.com/v1beta/models",
+        "models": ["gemini-2.0-flash", "gemini-1.5-pro"],
+        "model_input": "dropdown",
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "chat_url": "https://openrouter.ai/api/v1/chat/completions",
+        "models_url": "https://openrouter.ai/api/v1/models",
+        "models": ["openai/gpt-4o-mini"],
+        "model_input": "text",
+    },
+}
 
-AVAILABLE_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "gemma2-9b-it",
-    "mixtral-8x7b-32768",
-    OPENROUTER_DEFAULT_MODEL,
-]
+DEFAULT_PROVIDER = "groq"
+DEFAULT_MODELS = {k: v["models"][0] for k, v in PROVIDER_CONFIG.items()}
 
 SYSTEM_PROMPT = """You are an automation expert. When given a task description, generate a structured desktop automation macro.
 
@@ -96,11 +128,11 @@ class APIError(Exception):
         self.status_code = status_code
 
 
-class GroqClient:
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile", openrouter_api_key: str = ""):
-        self.api_key = self._normalize_api_key(api_key)
-        self.openrouter_api_key = self._normalize_api_key(openrouter_api_key)
-        self.model = model
+class AIClient:
+    def __init__(self, provider: str, model: str, api_keys: dict[str, str]):
+        self.provider = provider if provider in PROVIDER_CONFIG else DEFAULT_PROVIDER
+        self.model = model or DEFAULT_MODELS[self.provider]
+        self.api_keys = {k: self._normalize_api_key(v) for k, v in (api_keys or {}).items()}
 
     @staticmethod
     def _normalize_api_key(api_key: str) -> str:
@@ -112,45 +144,38 @@ class GroqClient:
         return key
 
     @property
-    def _use_openrouter(self) -> bool:
-        return bool(self.openrouter_api_key)
+    def provider_label(self) -> str:
+        return PROVIDER_CONFIG[self.provider]["label"]
 
     @property
-    def _active_key(self) -> str:
-        return self.openrouter_api_key if self._use_openrouter else self.api_key
+    def active_key(self) -> str:
+        return self.api_keys.get(self.provider, "")
 
-    @property
-    def _chat_url(self) -> str:
-        return OPENROUTER_API_URL if self._use_openrouter else GROQ_API_URL
+    def _headers(self, is_json: bool = True) -> dict:
+        key = self.active_key
+        if not key:
+            return {}
 
-    @property
-    def _models_url(self) -> str:
-        return OPENROUTER_MODELS_URL if self._use_openrouter else GROQ_MODELS_URL
+        headers = {}
+        if self.provider == "anthropic":
+            headers["x-api-key"] = key
+            headers["anthropic-version"] = "2023-06-01"
+        else:
+            headers["Authorization"] = f"Bearer {key}"
 
-    @property
-    def _resolved_model(self) -> str:
-        if not self._use_openrouter:
-            return self.model
-        if self.model in AVAILABLE_MODELS[:4]:
-            return OPENROUTER_DEFAULT_MODEL
-        return self.model or OPENROUTER_DEFAULT_MODEL
-
-    def _headers(self) -> dict:
-        headers = {
-            "Authorization": f"Bearer {self._active_key}",
-            "Content-Type": "application/json",
-        }
-        if self._use_openrouter:
+        if self.provider == "openrouter":
             headers["HTTP-Referer"] = "https://automate-anything.local"
             headers["X-Title"] = "Automate Anything"
+
+        if is_json:
+            headers["Content-Type"] = "application/json"
         return headers
 
     def validate_key(self) -> tuple[bool, str]:
-        """Quick validation by listing models."""
         try:
             req = urllib.request.Request(
-                self._models_url,
-                headers=self._headers(),
+                self._models_url(),
+                headers=self._headers(is_json=False),
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status == 200, ""
@@ -158,67 +183,121 @@ class GroqClient:
             if e.code == 401:
                 return False, "Invalid API key. Please check and try again."
             if e.code == 403:
-                provider = "OpenRouter" if self._use_openrouter else "Groq"
-                return False, f"Access denied by {provider} (HTTP 403). Check key permissions and account status."
-            return False, f"Validation failed (HTTP {e.code}). Please try again."
+                return False, f"Access denied by {self.provider_label} (HTTP 403)."
+            return False, f"Validation failed (HTTP {e.code})."
         except urllib.error.URLError as e:
             return False, f"Network error during validation: {e.reason}"
         except Exception as e:
             return False, f"Validation error: {e}"
 
-    def generate_macro(
-        self,
-        prompt: str,
-        progress_callback: Optional[Callable[[str], None]] = None,
-    ) -> Macro:
-        """Call Groq API and parse response into a Macro."""
+    def _models_url(self) -> str:
+        cfg = PROVIDER_CONFIG[self.provider]
+        if self.provider == "gemini":
+            return f"{cfg['models_url']}?key={self.active_key}"
+        return cfg["models_url"]
+
+    def generate_macro(self, prompt: str, progress_callback: Optional[Callable[[str], None]] = None) -> Macro:
+        if not self.active_key:
+            raise APIError(f"No API key set for {self.provider_label}. Open Settings to add it.")
 
         if progress_callback:
-            provider = "OpenRouter" if self._use_openrouter else "Groq"
-            progress_callback(f"Sending request to {provider} API...")
+            progress_callback(f"Sending request to {self.provider_label} API...")
 
-        payload = json.dumps({
-            "model": self._resolved_model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Create a macro for: {prompt}"},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 2048,
-        }).encode("utf-8")
-
-        req = urllib.request.Request(self._chat_url, data=payload, headers=self._headers(), method="POST")
-
+        req = self._build_chat_request(prompt)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             if e.code == 401:
-                provider = "OpenRouter" if self._use_openrouter else "Groq"
-                raise APIError(f"Invalid API key. Please check your {provider} API key.", 401)
-            elif e.code == 429:
+                raise APIError(f"Invalid API key for {self.provider_label}.", 401)
+            if e.code == 429:
                 raise APIError("Rate limit exceeded. Please wait and try again.", 429)
-            else:
-                raise APIError(f"API error {e.code}: {body}", e.code)
+            raise APIError(f"API error {e.code}: {body}", e.code)
         except urllib.error.URLError as e:
             raise APIError(f"Network error: {e.reason}")
 
         if progress_callback:
             progress_callback("Parsing macro from response...")
 
-        raw_text = data["choices"][0]["message"]["content"]
+        raw_text = self._extract_text(data)
         return self._parse_macro(raw_text, prompt)
 
+    def _build_chat_request(self, prompt: str) -> urllib.request.Request:
+        cfg = PROVIDER_CONFIG[self.provider]
+
+        if self.provider == "anthropic":
+            payload = {
+                "model": self.model,
+                "max_tokens": 2048,
+                "system": SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": f"Create a macro for: {prompt}"}],
+            }
+            return urllib.request.Request(
+                cfg["chat_url"],
+                data=json.dumps(payload).encode("utf-8"),
+                headers=self._headers(),
+                method="POST",
+            )
+
+        if self.provider == "gemini":
+            payload = {
+                "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nCreate a macro for: {prompt}"}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
+            }
+            url = cfg["chat_url"].format(model=self.model) + f"?key={self.active_key}"
+            return urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Create a macro for: {prompt}"},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048,
+        }
+        return urllib.request.Request(
+            cfg["chat_url"],
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+
+    def _extract_text(self, data: dict) -> str:
+        if self.provider == "anthropic":
+            content = data.get("content", [])
+            for block in content:
+                if block.get("type") == "text":
+                    return block.get("text", "")
+            raise APIError("Anthropic response missing text.")
+
+        if self.provider == "gemini":
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise APIError("Gemini response missing candidates.")
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text = "\n".join(part.get("text", "") for part in parts if part.get("text"))
+            if not text:
+                raise APIError("Gemini response missing text.")
+            return text
+
+        try:
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise APIError(f"Unexpected API response format: {e}")
+
     def _parse_macro(self, raw: str, original_prompt: str) -> Macro:
-        """Extract and parse JSON from the model response."""
-        # Strip markdown fences if present
         text = raw.strip()
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         text = text.strip()
 
-        # Find JSON object
         start = text.find("{")
         end = text.rfind("}") + 1
         if start == -1 or end == 0:
@@ -230,9 +309,9 @@ class GroqClient:
             raise APIError(f"Failed to parse macro JSON: {e}")
 
         actions = []
-        for a in data.get("actions", []):
-            action_type = a.get("type", "")
-            params = a.get("params", {})
+        for action in data.get("actions", []):
+            action_type = action.get("type", "")
+            params = action.get("params", {})
             if action_type:
                 actions.append(MacroAction(type=action_type, params=params))
 

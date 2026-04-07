@@ -6,7 +6,7 @@ AI-powered desktop automation — describe what you want automated in plain Engl
 
 ## Features
 
-- **Natural language → macro**: Describe any task; Groq AI converts it to structured automation steps
+- **Natural language → macro**: Describe any task; your selected AI provider converts it to structured automation steps
 - **Image-based targeting**: Finds UI elements visually using OpenCV template matching — not fragile coordinates
 - **Multi-scale matching**: Handles elements at different zoom levels
 - **Retry logic**: Configurable retry count + delay per click action
@@ -39,11 +39,10 @@ pip install -r requirements.txt
 > sudo apt install python3-xlib
 > ```
 
-### 3. Get a Groq API key
+### 3. Add one or more provider API keys
 
-1. Visit [console.groq.com](https://console.groq.com)
-2. Create a free account
-3. Generate an API key
+The app supports multiple providers (Groq, OpenAI, Anthropic, Google Gemini, OpenRouter).
+All keys are optional, but you need at least one key to continue.
 
 ### 4. Run the app
 
@@ -51,7 +50,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first launch, you'll be prompted for your Groq API key. It's stored securely (base64-obfuscated) in `~/.automate_anything/config.json` with restricted file permissions.
+On first launch, you'll be prompted to choose a provider and optionally add keys for each provider. Keys are stored locally (base64-obfuscated) in `~/.automate_anything/config.json` with restricted file permissions.
 
 ---
 
@@ -83,7 +82,7 @@ For each "Click Image" step in a macro:
 
 ### Settings
 
-Click **⚙ Settings** or go to File → Settings to update your API key or switch models.
+Click **⚙ Settings** or go to File → Settings to manage provider keys, switch providers, and select provider-specific models (dropdown for most providers, free-text model for OpenRouter).
 
 ---
 
