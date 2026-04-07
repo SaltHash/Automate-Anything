@@ -60,7 +60,19 @@ class Config:
         self._save()
 
     def has_api_key(self) -> bool:
-        return bool(self.get_api_key())
+        return bool(self.get_api_key() or self.get_openrouter_api_key())
+
+    def get_openrouter_api_key(self) -> str:
+        raw = self._data.get("openrouter_api_key", "")
+        return self._decode(raw) if raw else ""
+
+    def set_openrouter_api_key(self, key: str):
+        key = (key or "").strip()
+        if key:
+            self._data["openrouter_api_key"] = self._encode(key)
+        else:
+            self._data.pop("openrouter_api_key", None)
+        self._save()
 
     def get(self, key: str, default=None):
         return self._data.get(key, default)
